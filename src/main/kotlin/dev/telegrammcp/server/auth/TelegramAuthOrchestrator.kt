@@ -376,8 +376,20 @@ class TelegramAuthOrchestrator(
             }
 
             is TdApi.AuthorizationStateWaitCode -> {
-                log.info("TDLib auth: WAIT_CODE")
-                // State is set by InteractiveClientInteraction.onParameterRequest
+                val info = state.codeInfo
+                log.info("TDLib auth: WAIT_CODE (channel={})", AuthCodeChannel.of(info?.type) ?: "unknown")
+                // InteractiveClientInteraction publishes this state too, but it
+                // is not called again after a resend — TDLib only updates
+                // codeInfo here. Republishing keeps the channel honest, and
+                // setState leaves the pending code future untouched.
+                authStateHolder.setState(
+                    AuthState.WaitingCode(
+                        phoneNumber = info?.phoneNumber?.takeIf { it.isNotBlank() } ?: phoneNumber,
+                        codeChannel = AuthCodeChannel.of(info?.type),
+                        nextCodeChannel = AuthCodeChannel.of(info?.nextType),
+                        resendTimeoutSeconds = info?.timeout?.takeIf { it > 0 },
+                    ),
+                )
             }
 
             is TdApi.AuthorizationStateWaitPassword -> {

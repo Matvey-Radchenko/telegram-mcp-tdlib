@@ -21,9 +21,18 @@ sealed class AuthState(val name: String) {
         override val timestamp: Instant = Instant.now(),
     ) : AuthState("waitingPhoneNumber")
 
-    /** TDLib sent an SMS/call code; the wizard should prompt for it. */
+    /**
+     * TDLib sent a login code; the wizard should prompt for it.
+     *
+     * [codeChannel] says *where* Telegram put it (see [AuthCodeChannel]) —
+     * without it the wizard cannot tell the user whether to look in the
+     * Telegram app, in SMS, or at an incoming call.
+     */
     data class WaitingCode(
         val phoneNumber: String,
+        val codeChannel: String? = null,
+        val nextCodeChannel: String? = null,
+        val resendTimeoutSeconds: Int? = null,
         override val timestamp: Instant = Instant.now(),
     ) : AuthState("waitingCode")
 

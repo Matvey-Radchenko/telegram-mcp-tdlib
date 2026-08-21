@@ -4,6 +4,7 @@ import dev.telegrammcp.server.util.StructuredLogger
 import it.tdlight.client.ClientInteraction
 import it.tdlight.client.InputParameter
 import it.tdlight.client.ParameterInfo
+import it.tdlight.client.ParameterInfoCode
 import java.util.concurrent.CompletableFuture
 
 /**
@@ -27,8 +28,19 @@ class InteractiveClientInteraction(
         info: ParameterInfo,
     ): CompletableFuture<String> = when (parameter) {
         InputParameter.ASK_CODE -> {
-            log.info("TDLib requests login code — waiting for interactive input")
-            authStateHolder.setState(AuthState.WaitingCode(phoneNumber = phoneNumber))
+            // TDLib hands us the delivery channel here and nowhere else; it used
+            // to be dropped, leaving the wizard unable to say where the code went.
+            val codeInfo = info as? ParameterInfoCode
+            val channel = AuthCodeChannel.of(codeInfo?.type)
+            log.info("TDLib requests login code (channel={}) — waiting for interactive input", channel ?: "unknown")
+            authStateHolder.setState(
+                AuthState.WaitingCode(
+                    phoneNumber = codeInfo?.phoneNumber?.takeIf { it.isNotBlank() } ?: phoneNumber,
+                    codeChannel = channel,
+                    nextCodeChannel = AuthCodeChannel.of(codeInfo?.nextType),
+                    resendTimeoutSeconds = codeInfo?.timeout?.takeIf { it > 0 },
+                ),
+            )
             authStateHolder.awaitCode()
         }
 

@@ -23,6 +23,12 @@ data class SubmitPasswordRequest(
 data class AuthStateDto(
     val state: String,
     val phoneNumber: String? = null,
+    /** Where Telegram delivered the login code — see [AuthCodeChannel]. */
+    val codeChannel: String? = null,
+    /** Channel a resend would use, when TDLib offers one. */
+    val nextCodeChannel: String? = null,
+    /** Seconds until a resend is allowed, when TDLib reports it. */
+    val resendTimeoutSeconds: Int? = null,
     val qrLink: String? = null,
     val passwordHint: String? = null,
     val errorMessage: String? = null,
@@ -41,6 +47,9 @@ data class AuthStateDto(
             is AuthState.WaitingCode -> AuthStateDto(
                 state = authState.name,
                 phoneNumber = authState.phoneNumber,
+                codeChannel = authState.codeChannel,
+                nextCodeChannel = authState.nextCodeChannel,
+                resendTimeoutSeconds = authState.resendTimeoutSeconds,
                 timestamp = authState.timestamp,
             )
             is AuthState.WaitingQr -> AuthStateDto(
