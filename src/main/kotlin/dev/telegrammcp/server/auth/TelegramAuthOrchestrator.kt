@@ -19,8 +19,11 @@ import it.tdlight.client.SimpleTelegramClientBuilder
 import it.tdlight.client.SimpleTelegramClientFactory
 import it.tdlight.client.TDLibSettings
 import it.tdlight.jni.TdApi
-import org.springframework.core.task.TaskExecutor
+import jakarta.annotation.PreDestroy
 import org.springframework.stereotype.Service
+import java.util.concurrent.ExecutorService
+import java.util.concurrent.Executors
+import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.locks.ReentrantLock
 import kotlin.concurrent.withLock
@@ -47,7 +50,6 @@ class TelegramAuthOrchestrator(
     private val meterRegistry: MeterRegistry,
     private val delegatingClient: DelegatingTelegramClientService,
     private val platformPaths: PlatformPaths,
-    private val taskExecutor: TaskExecutor,
     private val buildProperties: org.springframework.boot.info.BuildProperties? = null,
     private val authWizard: AuthWizardProperties = AuthWizardProperties(),
     private val telegramProperties: TelegramProperties = TelegramProperties(),
@@ -55,6 +57,25 @@ class TelegramAuthOrchestrator(
 
     private val log = StructuredLogger.forClass<TelegramAuthOrchestrator>()
     private val lock = ReentrantLock()
+
+    /**
+     * Every factory creation and teardown runs here, one at a time.
+     *
+     * TDLib permits a single receive loop per process. Build a new factory
+     * while the previous one is still closing and TDLib aborts with "Receive
+     * must not be called simultaneously from two different threads"; tdlight
+     * then loses the client id ("Unknown client id N! events have been
+     * dropped") and the JVM dies with SIGSEGV. A shared pool cannot prevent
+     * that — mutual exclusion is not enough, the close must also *precede* the
+     * next build — so lifecycle work gets its own single thread. It is still
+     * off the HTTP threads, which is why this work was made asynchronous in
+     * the first place: factory.close() can block for seconds while a caller's
+     * HTTP timeout runs down.
+     */
+    private val clientLifecycleExecutor: ExecutorService =
+        Executors.newSingleThreadExecutor { runnable ->
+            Thread(runnable, "tdlib-client-lifecycle").apply { isDaemon = true }
+        }
 
     /** Incremented on every initAuth call; lets the background thread detect if it was superseded. */
     private val generation = AtomicInteger(0)
@@ -159,8 +180,9 @@ class TelegramAuthOrchestrator(
             val myGeneration = generation.incrementAndGet()
             activeBuilds.incrementAndGet()
 
-            // Submit to the Spring-managed executor to avoid untracked daemon threads.
-            taskExecutor.execute {
+            // Queued behind any teardown enqueued above, so the previous
+            // factory is fully closed before this one is built.
+            clientLifecycleExecutor.execute {
                 try {
                     val (factory, client) = buildTdlibClient(apiId, apiHash, normalizedPhoneNumber)
                     lock.withLock {
@@ -262,6 +284,20 @@ class TelegramAuthOrchestrator(
 
     /** Returns the currently active client (if any). Used by tools via dynamic bean lookup. */
     fun getClient(): SimpleTelegramClient? = currentClient
+
+    /**
+     * Let a queued teardown finish on shutdown: killing the thread mid-close
+     * leaves TDLib's native state half-torn-down, which the next process start
+     * inherits as a corrupt session.
+     */
+    @PreDestroy
+    fun shutdownLifecycleExecutor() {
+        clientLifecycleExecutor.shutdown()
+        if (!clientLifecycleExecutor.awaitTermination(10, TimeUnit.SECONDS)) {
+            log.warn("TDLib lifecycle executor did not drain in 10s — forcing shutdown")
+            clientLifecycleExecutor.shutdownNow()
+        }
+    }
 
     // ── Private ─────────────────────────────────────────────────────────────
 
@@ -403,7 +439,7 @@ class TelegramAuthOrchestrator(
      * lock it holds) is freed immediately. Safe to call from inside [lock].
      */
     private fun closeFactoryAsync(factory: SimpleTelegramClientFactory, context: String) {
-        taskExecutor.execute {
+        clientLifecycleExecutor.execute {
             try {
                 factory.close()
                 log.debug("TDLib factory closed ({})", context)
