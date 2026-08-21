@@ -58,6 +58,9 @@ class TelegramAuthOrchestrator(
     private val log = StructuredLogger.forClass<TelegramAuthOrchestrator>()
     private val lock = ReentrantLock()
 
+    /** How long an auth-phase request may take before we stop waiting on it. */
+    private val AUTH_REQUEST_TIMEOUT_SECONDS = 10L
+
     /**
      * Every factory creation and teardown runs here, one at a time.
      *
@@ -237,7 +240,9 @@ class TelegramAuthOrchestrator(
         // Read currentClient under the lock to prevent a TOCTOU race with initAuth/logout.
         // The send() call itself is intentionally outside the lock to avoid holding it
         // during async I/O; the local `client` reference remains valid regardless.
-        client.send(TdApi.RequestQrCodeAuthentication()) { result ->
+        // sendUnsafe for the same reason as in resendCode: the authorization
+        // gate in `send` would hold an authorization request forever.
+        client.sendUnsafe(TdApi.RequestQrCodeAuthentication(), { result ->
             if (result.isError) {
                 // Don't overwrite the real auth state (WaitingCode / WaitingPassword /
                 // Ready) with an Error — an out-of-phase QR request is often spurious
@@ -247,6 +252,40 @@ class TelegramAuthOrchestrator(
             } else {
                 log.info("QR code authentication requested — waiting for TDLib state update")
             }
+        }, { error -> log.warn("RequestQrCodeAuthentication failed to dispatch: {}", error.message) })
+    }
+
+    /**
+     * Asks Telegram to send the login code again.
+     *
+     * This is the supported way out of the commonest dead end in interactive
+     * login: Telegram delivered the code to a channel the user cannot reach —
+     * an app they are not signed into, or an SMS lost to roaming — and
+     * re-submitting the phone number only ever gets the same suppressed code
+     * back. Telegram picks the next channel itself; `nextCodeChannel` in the
+     * published state says which one it will be.
+     */
+    fun resendCode(): String? {
+        val client = lock.withLock { currentClient }
+            ?: throw IllegalStateException("TDLib client is not initialized. Call /auth/credentials first.")
+
+        // `send` holds a request back until the client is authorized, which for
+        // a request that is itself part of authorization means forever: the
+        // call returns, nothing is dispatched, and the handler never fires.
+        // Auth-phase requests have to go out through sendUnsafe.
+        return try {
+            client.sendUnsafe(TdApi.ResendAuthenticationCode()).get(AUTH_REQUEST_TIMEOUT_SECONDS, TimeUnit.SECONDS)
+            log.info("Login code resend accepted by Telegram")
+            null
+        } catch (e: java.util.concurrent.ExecutionException) {
+            // Telegram refuses a resend that comes too early, and says how long
+            // to wait. Returning it beats a 200 that quietly did nothing.
+            val reason = e.cause?.message ?: e.message ?: "resend rejected"
+            log.warn("ResendAuthenticationCode rejected by TDLib: {}", reason)
+            reason
+        } catch (e: java.util.concurrent.TimeoutException) {
+            log.warn("ResendAuthenticationCode timed out after {}s", AUTH_REQUEST_TIMEOUT_SECONDS)
+            "Telegram did not answer the resend request in time"
         }
     }
 

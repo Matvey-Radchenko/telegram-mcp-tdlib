@@ -181,6 +181,45 @@ class TelegramAuthController(
     }
 
     /**
+     * Ask Telegram to resend the login code, typically through another channel.
+     */
+    @PostMapping("/resend-code")
+    fun resendCode(): ResponseEntity<AuthStateDto> {
+        multiAccountConflict()?.let { return it }
+        val state = authStateHolder.getState()
+        if (state !is AuthState.WaitingCode) {
+            return ResponseEntity.status(HttpStatus.CONFLICT).body(
+                AuthStateDto(
+                    state = state.name,
+                    errorMessage = "No code request is pending — current state: ${state.name}",
+                    timestamp = java.time.Instant.now(),
+                ),
+            )
+        }
+        return try {
+            val refusal = orchestrator.resendCode()
+            if (refusal != null) {
+                return ResponseEntity.status(HttpStatus.CONFLICT).body(
+                    AuthStateDto(
+                        state = authStateHolder.getState().name,
+                        errorMessage = refusal,
+                        timestamp = java.time.Instant.now(),
+                    ),
+                )
+            }
+            ResponseEntity.ok(AuthStateDto.from(authStateHolder.getState()))
+        } catch (e: IllegalStateException) {
+            ResponseEntity.status(HttpStatus.CONFLICT).body(
+                AuthStateDto(
+                    state = state.name,
+                    errorMessage = e.message ?: "TDLib client is not initialized",
+                    timestamp = java.time.Instant.now(),
+                ),
+            )
+        }
+    }
+
+    /**
      * Log out from the current TDLib session.
      */
     @PostMapping("/logout")
