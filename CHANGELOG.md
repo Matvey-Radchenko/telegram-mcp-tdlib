@@ -3,6 +3,42 @@
 Notable changes to Telegram MCP Server are documented here. The project follows
 [Semantic Versioning](https://semver.org/).
 
+## 1.16.0 - 2026-08-22
+
+### Added
+
+- `POST /auth/resend-code` asks Telegram to send the login code again. Until
+  now the only way out of "the code never arrived" was to resubmit the phone
+  number, which returns the same suppressed code — Telegram issues a new one
+  only for an explicit resend. The call waits for Telegram's verdict and
+  returns the refusal it gives (for example `400: Authentication code can't be
+  resend`), because a 200 that quietly did nothing is worse than an error.
+- The auth state reports where Telegram delivered the code: `codeChannel`,
+  `nextCodeChannel` and `resendTimeoutSeconds` on `AuthStateDto`. TDLib hands
+  the delivery channel to `ClientInteraction` and it was being dropped, leaving
+  every wizard able to say only "enter the code" while its user searched the
+  wrong inbox — an in-app message, an SMS, or a flash call whose *caller's
+  number is the code* and which delivers no message at all.
+
+### Fixed
+
+- A second TDLib client in one process no longer kills the server. Rebuilding
+  the client while the previous factory was still closing tripped TDLib's own
+  guard — "Receive must not be called simultaneously from two different
+  threads" — after which tdlight lost the client id and the JVM exited with
+  139. Factory creation and teardown now share a single thread, so a close
+  always completes before the next build; both still run off the HTTP threads.
+  Reached by any host that offers a retry after a mistyped phone number.
+- Authorization requests now reach TDLib. `SimpleTelegramClient.send` holds a
+  request until the client is authorized, which for a request that is part of
+  authorization means never: `/auth/request-qr` had been dispatching nothing at
+  all, hidden by TDLib emitting the QR link on its own when the flow starts
+  with an empty phone number. Both `/auth/request-qr` and the new resend use
+  `sendUnsafe`.
+- The delivery channel stays current across a resend: TDLib updates `codeInfo`
+  on the `WAIT_CODE` update and does not call the interaction handler a second
+  time, so the state is republished from the update.
+
 ## 1.15.0 - 2026-08-06
 
 ### Added
