@@ -39,7 +39,6 @@ object ToolSupport {
 
     private val userContentAnnotations = McpSchema.Annotations.builder()
         .audience(listOf(McpSchema.Role.USER))
-        .priority(0.8)
         .build()
 
     @Suppress("UNCHECKED_CAST")

@@ -100,7 +100,8 @@ class FileSecurityServiceTest {
 
         val result = service.validatePath(file.toString())
 
-        assertEquals(file.toAbsolutePath().normalize(), result)
+        val canonicalFile = file.parent.toRealPath().resolve(file.fileName)
+        assertEquals(canonicalFile, result)
     }
 
     @Test

@@ -5,6 +5,7 @@ import io.modelcontextprotocol.spec.McpSchema
 import org.junit.jupiter.api.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 class UntrustedContentNormalizerTest {
@@ -25,7 +26,9 @@ class UntrustedContentNormalizerTest {
         assertTrue(text.contains("\\\\u200B"))
         assertFalse(text.contains('\u202E'))
         assertFalse(text.contains('\u200B'))
-        assertEquals(listOf(McpSchema.Role.USER), (result.content().single() as McpSchema.TextContent).annotations().audience())
+        val annotations = (result.content().single() as McpSchema.TextContent).annotations()
+        assertEquals(listOf(McpSchema.Role.USER), annotations.audience())
+        assertNull(annotations.priority())
     }
 
     @Test
