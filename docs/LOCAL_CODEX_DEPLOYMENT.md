@@ -1,177 +1,91 @@
-# Codex Singleton Deployment and Recovery
+# Patched backend and external gateway
 
-The fork branch `codex/singleton-http` and its `v1.16.0-codex.*` tags are the
-source of truth for the Telegram MCP instance used by Codex. They preserve the
-server changes, deployment scripts, rollback logic, and recovery instructions.
+This fork is the recoverable source for the patched **Telegram backend**, not a
+process supervisor. Its historical default branch remains `codex/singleton-http`;
+the branch name does not imply that current code installs a singleton wrapper.
 
-The repository never stores Telegram API credentials, the authorized TDLib
-session, private chat IDs, or local MCP client configuration. On the same Mac,
-preserve those files during recovery. On another Mac, create credentials and
-authorize Telegram again.
+## Preserved patches
 
-## Supported topology
+- Broadcast-channel reaction counts come from `message.interactionInfo.reactions`.
+  When Telegram disallows enumerating reactors (`BROADCAST_FORBIDDEN`), the tool
+  still returns available aggregate counts, without pretending to know identities.
+- Content annotations omit the optional `priority` field for Codex compatibility.
+- The canonical upload-path test accepts the platform's resolved temporary path.
 
-- One launchd-owned Streamable HTTP daemon listens on `127.0.0.1:8765`.
-- Codex and OpenCode connect to `http://127.0.0.1:8765/mcp` as remote MCP
-  clients.
-- No Codex client starts a Telegram MCP STDIO child against the shared TDLib
-  directory.
-- The daemon is the only process allowed to own
-  `~/Library/Application Support/TelegramMcpServer/tdlib/default/td.binlog`.
-- Credentials remain in `~/.config/telegram-mcp`; they are not committed here.
+The old local launch-agent installer, shell singleton launcher/manager and its HTTP
+smoke script have been removed. Upstream stdio and HTTP transports remain available.
+Historical `v1.16.0-codex.*` tags retain older deployments for explicit rollback.
 
-The managed launcher refuses `serve --transport stdio` and refuses to start a
-second server while another process owns the TDLib database.
+## Build or restore on another device
 
-## Local patch stack
+1. Clone this fork's default branch (not upstream's release binary).
+2. Install a complete Java 25 JDK; set `TELEGRAM_MCP_JAVA_HOME` if it is not at the
+   local build helper's default location.
+3. Run `scripts/local/build-local.sh 1.16.0-codex.4`. This runs tests and builds
+   `build/libs/telegram-mcp-server.jar`. Keep the JAR together with its checksum.
+4. Obtain your own Telegram API ID/hash. `scripts/local/save-credentials.sh`
+   stores them privately outside Git. Supply `TDLIB_API_ID` and
+   `TDLIB_API_HASH_FILE` to the process; never commit their values.
+5. With every other owner of the target TDLib directory stopped, authenticate
+   using `scripts/local/auth-local.sh` (with the credential environment set),
+   or the upstream `auth` CLI documented in the README.
+6. Configure your external gateway as below. The gateway is a separate project;
+   this fork alone does not install or reconstruct it.
 
-Keep the commits independent and ordered:
+## Backend contract for an external gateway
 
-1. `fix: return aggregate reactions for broadcast channels` — suitable for an
-   upstream pull request.
-2. `compat: omit content priority for Codex clients` — local workaround for the
-   installed Rust MCP client's handling of `content[].annotations.priority`.
-3. Local deployment scripts and this document — not an upstream product change.
+Start the tested JAR directly, without a shell wrapper:
 
-## Stored recovery components
-
-- `scripts/local/build-local.sh` — reproducible Java 25 build and full tests.
-- `scripts/local/save-credentials.sh` — stores API credentials outside Git with
-  mode `0600`.
-- `scripts/local/auth-local.sh` — authorizes a fresh TDLib session locally.
-- `scripts/local/install-launch-agent.sh` — generates a launchd definition for
-  the current macOS user without hard-coded home paths.
-- `scripts/local/manage-singleton.sh` — immutable release install, activation,
-  health verification, and rollback.
-- `scripts/local/smoke-singleton.sh` — read-only singleton and reaction-count
-  verification using a target stored outside Git.
-
-## Runtime paths
-
-| Purpose | Path |
-|---|---|
-| Source repository | Any local clone of this fork |
-| Java 25 toolchain | `TELEGRAM_MCP_JAVA_HOME`, or the documented local default |
-| Managed releases | `~/.local/opt/telegram-mcp-codex/releases` |
-| Active release | `~/.local/opt/telegram-mcp-codex/current` |
-| Previous release | `~/.local/opt/telegram-mcp-codex/previous` |
-| launchd definition | `~/Library/LaunchAgents/io.github.tolboy.telegram-mcp.plist` |
-| Stable launcher | `~/.local/bin/telegram-mcp-codex` |
-| Codex client config | `~/.codex/config.toml` |
-| OpenCode client config | `~/.config/opencode/opencode.jsonc` |
-
-## Build and install
-
-Use a new local version for every changed artifact; never overwrite an existing
-release directory.
-
-```bash
-scripts/local/build-local.sh 1.16.0-codex.1
-scripts/local/manage-singleton.sh install 1.16.0-codex.1
+```text
+/absolute/java --enable-native-access=ALL-UNNAMED -jar /absolute/telegram-mcp-server.jar serve --transport stdio
 ```
 
-The manager performs the only supported update sequence:
+Use a shared, lazy backend with exactly one worker for this account-data directory.
+Use private credentials and explicit data paths. Retain the intended policy:
 
-1. unload the launchd service;
-2. wait for port `8765` and the TDLib lock to be released;
-3. install the immutable JAR and atomically switch `current`;
-4. load the launchd service;
-5. run a read-only singleton and broadcast-reaction smoke test;
-6. automatically restore the previous deployment if verification fails.
-
-Do not copy a JAR over the file used by a running JVM.
-
-## Restore on the current Mac
-
-Do not delete either of these directories:
-
-- `~/.config/telegram-mcp`
-- `~/Library/Application Support/TelegramMcpServer/tdlib`
-
-Then restore a tagged source version and install its JAR:
-
-```bash
-git clone https://github.com/Matvey-Radchenko/telegram-mcp-tdlib.git
-cd telegram-mcp-tdlib
-git switch --detach v1.16.0-codex.3
-scripts/local/build-local.sh 1.16.0-codex.3
-scripts/local/manage-singleton.sh install 1.16.0-codex.3
+```text
+TDLIB_API_ID=<private credential>
+TDLIB_API_HASH_FILE=/absolute/private/api-hash
+TELEGRAM_MCP_DATA_DIR=/absolute/private/application-data
+TDLIB_DATA_DIR=/absolute/private/application-data/tdlib/default
+MCP_TOOL_PROFILE=inbox
+MCP_READ_ONLY=false
+MCP_CONFIRMATION_REQUIRED=true
+MCP_DESTRUCTIVE_APPROVAL=loopback
+SPRING_AI_MCP_SERVER_CAPABILITIES_COMPLETION=false
 ```
 
-The tagged GitHub release also contains `telegram-mcp-server.jar`. It can be
-passed as the optional third argument to `manage-singleton.sh install` instead
-of building locally.
+These are example policy settings, not a recommendation to enable writes for every
+installation. For read-only use set `MCP_READ_ONLY=true`. Keep destructive approval
+enabled. The gateway must not impersonate a user's confirmation. HTTP authentication
+is enforced by the gateway; clients connect to its authenticated loopback MCP URL.
+Spring advertises completion by default even though this backend has no completion
+handlers; turn it off for a gateway that does not implement that optional capability.
 
-## Set up another Mac
+With `mcp-session-gateway`, use the generic stdio profile, `ownership="shared"`,
+`max_workers=1`, and `shared_client_roots="ignore"`: this account API does not use
+the calling project's filesystem roots. Set `command` to Java, `command_args` to
+`["--enable-native-access=ALL-UNNAMED", "-jar"]`, `entrypoint` to the JAR, and `args`
+to `["serve", "--transport", "stdio"]`. The runtime pins the artifact and catalog.
+Private environment-file references can supply both API credentials instead of
+embedding secrets in configuration. Keep the account registry/confirmation storage
+at their established locations as well as the TDLib data directory.
 
-1. Clone this fork and check out the latest `v1.16.0-codex.*` tag.
-2. Install a complete JDK 25 and, when it is not at the documented default
-   location, export `TELEGRAM_MCP_JAVA_HOME=/absolute/path/to/jdk/Contents/Home`.
-3. Save Telegram application credentials locally:
+## Cutover and rollback invariants
 
-   ```bash
-   scripts/local/save-credentials.sh
-   ```
+- Stop/disable the previous service and verify it has released TDLib files **before**
+  catalog discovery, authentication, or launching a replacement backend. Discovery
+  itself starts a process; it is not safe alongside an existing owner of the same DB.
+- Back up session/account data privately while offline. Do not copy it into Git or
+  create a second concurrently running installation from that backup.
+- Verify discovery, read-only history and aggregate reaction retrieval. Test two
+  clients against the same gateway and verify there is exactly one TDLib owner.
+- Do not validate with messages, reactions, joins, deletes or other Telegram writes.
+- Update all clients that used the old endpoint; restart clients retaining old MCP
+  connections. Keep old runtime artifacts and disabled service definitions until the
+  new deployment is accepted.
+- To roll back, stop the new gateway, verify TDLib files are released, restore the
+  previous service and client endpoint. Never enable both services simultaneously.
 
-4. Build the JAR, then authorize the `default` Telegram account. The auth
-   command opens a nonce-protected loopback page and does not publish the QR or
-   credentials:
-
-   ```bash
-   scripts/local/build-local.sh 1.16.0-codex.3
-   scripts/local/auth-local.sh build/libs/telegram-mcp-server.jar
-   ```
-
-5. Create the private read-only smoke target. Use any channel post whose
-   aggregate reactions the account can read:
-
-   ```bash
-   mkdir -p ~/.config/telegram-mcp
-   cp scripts/local/smoke.env.example ~/.config/telegram-mcp/smoke.env
-   chmod 600 ~/.config/telegram-mcp/smoke.env
-   # Edit the two numeric values in ~/.config/telegram-mcp/smoke.env
-   ```
-
-6. Install and start the singleton:
-
-   ```bash
-   scripts/local/manage-singleton.sh install 1.16.0-codex.3
-   ```
-
-   When the launchd definition is missing, the manager generates it for the
-   current macOS user. The default local profile enables inbox tools and writes,
-   while keeping destructive-action confirmation enabled.
-
-7. Point every MCP client at the same daemon. Codex needs this entry and no
-   Telegram STDIO command:
-
-   ```toml
-   [mcp_servers.telegram]
-   url = "http://127.0.0.1:8765/mcp"
-   ```
-
-   OpenCode uses a remote MCP entry with the same URL. Never configure either
-   client to launch another Telegram process against the shared TDLib session.
-
-## Verification and rollback
-
-```bash
-scripts/local/smoke-singleton.sh
-scripts/local/manage-singleton.sh status
-scripts/local/manage-singleton.sh rollback
-```
-
-The smoke test calls only `get_message_reactions` for the locally configured
-post. It sends no Telegram message or reaction and changes no chat state.
-
-## Updating from upstream
-
-1. Fetch the upstream tag without starting another Telegram process.
-2. Rebase the private maintenance branch onto that tag.
-3. Drop any local commit already included upstream.
-4. Resolve the compatibility commit separately; do not mix it into product
-   fixes.
-5. Build a new `X.Y.Z-codex.N` version.
-6. Install through `manage-singleton.sh`; never patch the active JAR in place.
-7. Publish a sanitized `codex/singleton-http` branch and a new immutable tag;
-   never publish credentials, session files, or private smoke targets.
+Tokens, account registry, auth/session material and local service configuration are
+device-local recovery assets. On a new device, reauthentication may be necessary.

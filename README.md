@@ -1,10 +1,10 @@
 # Telegram MCP Server
 
-> **Codex singleton recovery build:** this fork's `codex/singleton-http`
-> branch and `v1.16.0-codex.*` tags preserve the locally verified singleton
-> deployment. See [Local Codex Deployment](docs/LOCAL_CODEX_DEPLOYMENT.md) for
-> restore and new-device instructions. Credentials and TDLib session data are
-> intentionally not stored in Git.
+> **Patched Telegram backend:** this fork preserves aggregate broadcast-channel
+> reactions and Codex-compatible content annotations. Process sharing and service
+> deployment belong to an external MCP gateway, not this backend. See
+> [Local Codex Deployment](docs/LOCAL_CODEX_DEPLOYMENT.md) for build, recovery and
+> gateway integration. Credentials and TDLib session data are never stored in Git.
 
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 [![CI](https://github.com/tolboy/telegram-mcp-tdlib/actions/workflows/ci.yml/badge.svg)](https://github.com/tolboy/telegram-mcp-tdlib/actions/workflows/ci.yml)
